@@ -1,12 +1,16 @@
-# Ignore directories
-downloaded_threads/
-markdown_files/
-__pycache__/
-venv/
-.venv/
+{
+  "builds": [
+    {
+      "src": "main:app",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "main:app"
+    }
+  ]
+}
 
-# Ignore files
-.env
-preprocess.py
-*.pyc
-.DS_Store
+

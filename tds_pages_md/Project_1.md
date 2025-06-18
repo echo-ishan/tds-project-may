@@ -43,6 +43,15 @@ This is a [real question](https://discourse.onlinedegree.iitm.ac.in/t/ga5-questi
 
 ![Screenshot](/uploads/project-tds-virtual-ta-q1.webp)
 
+ >**Image:** The screenshot displays a multiple-choice question (question 8) from what appears to be an online quiz or assignment. The question asks about the input (not output) cost in cents if a specific Japanese text is passed to the `gpt-3.5-turbo-0125` model, assuming a cost of 50 cents per million input tokens.
+The Japanese text provided is: "私は静かな図書館で本を読みながら、時間の流れを忘れてしまいました。"
+The available answer choices are:
+* 0.0018
+* 0.00175
+* 0.0017
+* 0.00165
+The question requires calculating the token count of the Japanese text and then applying the given cost per million tokens to find the input cost in cents.
+
 The response must be a JSON object like this:
 
 ```

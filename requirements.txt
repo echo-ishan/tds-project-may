@@ -9,10 +9,13 @@ google-generativeai
 Pillow
 tqdm
 scikit-learn
-# fastapi
-# uvicorn
-# python-dotenv
-# aiohttp
+pydantic
+fastapi
+uvicorn
+httpx
+python-dotenv
+#utils
+#aiohttp
 numpy
 # pydantic
 beautifulsoup4

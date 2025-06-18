@@ -12,11 +12,10 @@ from io import BytesIO
 
 # --- Configuration ---
 load_dotenv()
-INPUT_DIR = "discourse_json1"
-OUTPUT_DIR = "discourse_md" # Final output folder
+INPUT_DIR = "discourse_json"
+OUTPUT_DIR = "discourse_md"
 DISCOURSE_BASE_URL = "https://discourse.onlinedegree.iitm.ac.in"
 
-# List of URL patterns for decorative images to IGNORE
 IGNORE_IMAGE_PATTERNS = [
     "/user_avatar/",
     "https://emoji.discourse-cdn.com/",
@@ -30,7 +29,7 @@ try:
     if not gemini_api_key:
         raise ValueError("GOOGLE_API_KEY not found in environment variables.")
     genai.configure(api_key=gemini_api_key)
-    GEMINI_MODEL = genai.GenerativeModel('gemini-2.5-flash-preview-05-20')
+    GEMINI_MODEL = genai.GenerativeModel('gemini-2.0-flash')
     print("✓ Gemini client initialized successfully.")
 except Exception as e:
     GEMINI_MODEL = None
@@ -38,12 +37,11 @@ except Exception as e:
 
 # --- Helper Functions ---
 def get_image_description_gemini(image_url):
-    """Uses Gemini to generate a textual description of an image."""
+    """Generates concise image descriptions using Gemini."""
     if not GEMINI_MODEL:
-        return "[Image description skipped: Gemini client not initialized]"
+        return "[Image description skipped]"
 
-    # Print the full, validated URL for clear logging
-    print(f"  > Analyzing image with Gemini: {image_url}...")
+    print(f"  > Analyzing image: {image_url}...")
     try:
         response = requests.get(image_url, timeout=30)
         response.raise_for_status()
@@ -51,17 +49,22 @@ def get_image_description_gemini(image_url):
         img = Image.open(BytesIO(response.content))
         mime_type = Image.MIME.get(img.format)
         if not mime_type:
-            return "[Image description failed: Unknown image format]"
+            return "[Unsupported image format]"
 
         image_part = {"mime_type": mime_type, "data": response.content}
-        prompt = "You are an expert at analyzing screenshots from a data science course forum. Describe the key information. Transcribe any code, commands, or error messages exactly as they appear."
+        prompt = """You are an expert at analyzing screenshots from a data science course forum. Analyze this technical screenshot and provide a concise description (4-5 sentences max) focusing on:
+1. Visible code snippets/error messages (transcribe exactly)
+2. UI elements relevant to the problem
+3. Data visualizations/charts
+4. Key textual content related to technical issues
+Omit decorative elements, avatars, and UI chrome. Prioritize actionable technical details."""
 
         api_response = GEMINI_MODEL.generate_content([prompt, image_part])
         return api_response.text.strip()
         
     except Exception as e:
-        print(f"    [!] Error analyzing image with Gemini: {e}")
-        return "[Image description failed due to an API or network error]"
+        print(f"    [!] Image analysis failed: {e}")
+        return "[Image description unavailable]"
 
 def build_full_url(path, base_url):
     if not path or path.startswith("http"): return path
@@ -80,32 +83,23 @@ def preprocess_and_enrich_html(html_content, base_url):
             node_to_replace = img_tag.parent if img_tag.parent.name == 'a' and 'lightbox' in img_tag.parent.get('class', []) else img_tag
             image_url = build_full_url(node_to_replace.get('href') or img_tag.get('src'), base_url)
 
-            # --- THE NEW VALIDATION LOGIC ---
-            # 1. Check if the URL is valid and starts with http/https
             if not image_url or not image_url.startswith("http"):
-                node_to_replace.decompose() # Remove the invalid tag
-                continue # Skip to the next image
+                node_to_replace.decompose()
+                continue
 
-            # 2. Check if the URL matches a decorative pattern
             if any(pattern in image_url for pattern in IGNORE_IMAGE_PATTERNS):
-                node_to_replace.decompose() # Remove the decorative tag
+                node_to_replace.decompose()
                 continue
             
-            # If both checks pass, proceed with analysis
             description_text = get_image_description_gemini(image_url)
-            
-            # print(f"  > Description: {description_text}")
-            description_markdown = f"\n\n> **Image Content:** *{description_text}*\n\n"
-            
             placeholder = f"__IMAGE_PLACEHOLDER_{image_url}__"
-            image_descriptions[placeholder] = description_markdown
-            # print(f" >Description: {image_descriptions[placeholder]}")
+            image_descriptions[placeholder] = f"\n\n> **Image:** {description_text}\n\n"
             node_to_replace.replace_with(placeholder)
             
-            time.sleep(1) # Be respectful to the API
+            time.sleep(1)
 
         except Exception as e:
-            print(f"    [!] Skipped processing an image tag due to an unexpected error: {e}")
+            print(f"    [!] Image processing error: {e}")
             if 'node_to_replace' in locals() and not node_to_replace.is_root:
                  node_to_replace.decompose()
             continue
@@ -117,7 +111,7 @@ def preprocess_and_enrich_html(html_content, base_url):
     return str(soup), image_descriptions
 
 def convert_thread(json_path, md_path):
-    """Reads a single JSON file and converts it to enriched Markdown."""
+    """Converts JSON thread to Markdown with enhanced metadata."""
     try:
         with open(json_path, 'r', encoding='utf-8') as f: 
             data = json.load(f)
@@ -125,36 +119,58 @@ def convert_thread(json_path, md_path):
         print(f"[!] Error reading {json_path}: {e}")
         return
 
+    # Build topic metadata
     posts = data.get('post_stream', {}).get('posts', [])
     if not posts: return
     
-    markdown_output = [f"# Topic: {data.get('title', 'Discourse Thread')}\n"]
+    topic_id = data.get('id', '')
+    slug = data.get('slug', '')
+    topic_url = f"{DISCOURSE_BASE_URL}/t/{slug}/{topic_id}"
+    
+    markdown_output = [
+        f"# {data.get('title', 'Discourse Thread')}",
+        f"**Topic URL:** [Link]({topic_url})  ",
+        f"**Created:** {datetime.fromisoformat(data['created_at'].replace('Z','')).strftime('%B %d, %Y')}  ",
+        f"**Posts:** {len(posts)}  ",
+        "\n---\n"
+    ]
+
     for post in posts:
         if post.get('action_code') or not post.get('cooked', '').strip():
             continue
 
+        # Post metadata
+        post_number = post.get('post_number')
+        post_url = f"{topic_url}/{post_number}"
         author = post.get('display_username', 'Unknown')
-        user_title, flair_name = post.get('user_title'), post.get('flair_name')
-        author_role = f" ({', '.join(filter(None, [user_title, flair_name]))})" if user_title or flair_name else ""
-        
+        user_title = post.get('user_title')
+        flair_name = post.get('flair_name')
         created_dt = datetime.fromisoformat(post['created_at'].replace('Z', ''))
-        date_str = created_dt.strftime('%B %d, %Y, %H:%M UTC')
         
+        markdown_output.extend([
+            f"### Post #{post_number} by **{author}**",
+            f"*{created_dt.strftime('%B %d, %Y, %H:%M UTC')}*  ",
+            f"**Post URL:** [Link]({post_url})  ",
+            f"**Role:** {user_title or ''} {flair_name or ''}".strip()
+        ])
+
+        if post.get('reply_to_post_number'):
+            reply_to = post.get('reply_to_user', {}).get('username', f"Post #{post['reply_to_post_number']}")
+            markdown_output.append(f"> Replying to @{reply_to}")
+
+        # Process content
         processed_html, image_descriptions = preprocess_and_enrich_html(post['cooked'], DISCOURSE_BASE_URL)
         markdown_content = md(processed_html, heading_style="ATX").strip()
         
-        # THE FIX: Replace escaped placeholders instead of original ones
         for placeholder, description in image_descriptions.items():
             escaped_placeholder = placeholder.replace("_", "\\_")
             markdown_content = markdown_content.replace(escaped_placeholder, description)
 
         if markdown_content:
-            markdown_output.append(f"### Post #{post.get('post_number')} by **{author}**{author_role}")
-            markdown_output.append(f"*{date_str}*")
-            markdown_output.append(markdown_content)
+            markdown_output.append("\n" + markdown_content)
 
-        reactions = post.get('reactions', [])
-        if reactions:
+        # Reactions
+        if reactions := post.get('reactions'):
             emoji_map = {'heart': '❤️', '+1': '👍'}
             reaction_strs = [f"{emoji_map.get(r['id'], r['id'])} {r['count']}" for r in reactions]
             markdown_output.append(f"\n**Reactions:** {' '.join(reaction_strs)}")
@@ -165,30 +181,24 @@ def convert_thread(json_path, md_path):
         f.write("\n".join(markdown_output))
     print(f"✓ Converted {os.path.basename(json_path)}")
 
-
 def main():
-    """Main function to run the batch conversion process."""
     if not GEMINI_MODEL:
-        print("[!] Aborting: Gemini client is not available.")
+        print("[!] Aborting: Gemini client unavailable.")
         return
 
-    if not os.path.isdir(INPUT_DIR):
-        print(f"[!] Error: Input directory '{INPUT_DIR}' not found."); return
-
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    json_files = sorted([f for f in os.listdir(INPUT_DIR) if f.endswith('.json')])
+    json_files = sorted(f for f in os.listdir(INPUT_DIR) if f.endswith('.json'))
     
     if not json_files:
-        print(f"[!] No .json files found in '{INPUT_DIR}'."); return
+        print(f"[!] No JSON files in {INPUT_DIR}"); return
 
-    print(f"--- Starting conversion of {len(json_files)} files ---")
+    print(f"--- Converting {len(json_files)} files ---")
     for filename in json_files:
-        print(f"\nProcessing file: {filename}")
         json_path = os.path.join(INPUT_DIR, filename)
-        md_path = os.path.join(OUTPUT_DIR, os.path.splitext(filename)[0] + '.md')
+        md_path = os.path.join(OUTPUT_DIR, f"{os.path.splitext(filename)[0]}.md")
         convert_thread(json_path, md_path)
 
-    print("\n--- Batch conversion complete. ---")
+    print("\n--- Conversion complete ---")
 
 if __name__ == "__main__":
     main()
